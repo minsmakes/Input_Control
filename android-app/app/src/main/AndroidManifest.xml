@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <uses-permission android:name="android.permission.INTERNET"/>
+ <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+ <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:maxSdkVersion="36" android:usesPermissionFlags="neverForLocation"/>
+ <application android:label="Input_Control" android:roundIcon="@mipmap/input_control" android:icon="@mipmap/input_control" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
+  <activity android:name=".MainActivity" android:screenOrientation="fullUser" android:exported="true" android:windowSoftInputMode="adjustResize">
+   <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+  </activity>
+ </application>
+</manifest>

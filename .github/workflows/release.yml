@@ -1,0 +1,238 @@
+name: Build signed release draft
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release tag and version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^versionName=//p' release/version.properties)
+          code=$(sed -n 's/^versionCode=//p' release/version.properties)
+          semver='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          [[ $GITHUB_REF_NAME =~ ^v$semver$ && $GITHUB_REF_NAME == "v$version" ]]
+          [[ $code =~ ^[1-9][0-9]{0,9}$ ]]
+          (( code <= 2100000000 ))
+          git merge-base --is-ancestor HEAD origin/main
+          previous_code=7
+          previous_tag=v1.5.0
+          while read -r tag; do
+            if [[ $tag =~ ^v$semver$ && $tag != "$GITHUB_REF_NAME" ]]; then
+              previous_tag=$tag
+              if [[ $tag != v1.5.0 ]]; then
+                previous_code=$(git show "$tag:release/version.properties" | sed -n 's/^versionCode=//p')
+              fi
+              break
+            fi
+          done < <(git tag --merged HEAD --list 'v*' --sort=-version:refname)
+          [[ $previous_code =~ ^[1-9][0-9]{0,9}$ ]]
+          (( code > previous_code ))
+          [[ $(printf '%s\n' "$previous_tag" "$GITHUB_REF_NAME" | sort -V | tail -1) == "$GITHUB_REF_NAME" ]]
+          test -s release/NOTES.md
+          echo '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  android-app/gradle/wrapper/gradle-wrapper.jar' | sha256sum -c
+      - name: Check resolved Rust and Android dependencies for known vulnerabilities
+        shell: bash
+        run: |
+          scanner="$RUNNER_TEMP/osv-scanner"
+          curl --fail --silent --show-error --location --output "$scanner" https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64
+          echo "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8  $scanner" | sha256sum -c
+          chmod +x "$scanner"
+          "$scanner" scan source -L windows-receiver/Cargo.lock -L rust-core/Cargo.lock -L wifi-protocol/Cargo.lock -L android-app/app/gradle.lockfile
+
+  windows:
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 40
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      signer_subject: ${{ steps.verify.outputs.signer_subject }}
+    env:
+      WINDOWS_SIGNER_SUBJECT: ${{ vars.WINDOWS_SIGNER_SUBJECT }}
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Test and build Windows x64 receiver
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup show active-toolchain
+          if ((rustc --version) -notmatch '^rustc 1\.100\.0 ') { throw 'Wrong Rust version.' }
+          cargo test --locked --manifest-path windows-receiver/Cargo.toml
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path windows-receiver/Cargo.toml
+          $receiver = (Resolve-Path 'windows-receiver/target/x86_64-pc-windows-msvc/release/input-control-receiver.exe').Path
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $dumpbin = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (!$dumpbin) { throw 'MSVC dumpbin is required to check receiver dependencies.' }
+          $imports = & $dumpbin /dependents $receiver
+          if ($imports -match '(vcruntime|msvcp140|ucrtbased).*\.dll') { throw 'Receiver requires a separate MSVC runtime.' }
+          "RECEIVER_EXE=$receiver" >> $env:GITHUB_ENV
+          $inno = Join-Path $env:RUNNER_TEMP 'Inno Setup'
+          ./release/Install-Inno.ps1 -Destination $inno
+          "ISCC=$(Join-Path $inno 'ISCC.exe')" >> $env:GITHUB_ENV
+      - uses: azure/login@935127ca5bb3c4b02c9c2c10060028383878f33f # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign receiver
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ env.RECEIVER_EXE }}
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+      - name: Prepare uninstaller
+        id: uninstaller
+        shell: pwsh
+        run: |
+          ./release/Package-Windows.ps1 -Compiler $env:ISCC -Receiver $env:RECEIVER_EXE -OutputDirectory dist/windows -Mode PrepareUninstaller
+          exit 0
+      - name: Sign uninstaller
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.uninstaller.outputs.path }}
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+      - name: Build installer and portable ZIP
+        shell: pwsh
+        run: ./release/Package-Windows.ps1 -Compiler $env:ISCC -Receiver $env:RECEIVER_EXE -OutputDirectory dist/windows -Mode Package
+      - name: Sign installer
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}/dist/windows/InputControl-${{ github.ref_name }}-windows-x64-setup.exe
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+      - name: Verify Windows packages
+        id: verify
+        shell: pwsh
+        run: |
+          ./release/Package-Windows.ps1 -Compiler $env:ISCC -Receiver $env:RECEIVER_EXE -OutputDirectory dist/windows -Mode Verify
+          "signer_subject=$env:WINDOWS_SIGNER_SUBJECT" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-release
+          path: dist/windows/
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: android-signing
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25.0.3+9'
+      - name: Install pinned Android and Rust SDKs
+        shell: bash
+        run: |
+          sdkmanager --install 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;27.3.13750724'
+          rustup target add aarch64-linux-android x86_64-linux-android
+          rustc --version | grep -E '^rustc 1\.100\.0 '
+          java -version 2>&1 | grep -F '25.0.3'
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/bundletool.jar" https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+      - name: Run shared Rust tests
+        shell: bash
+        run: |
+          cargo test --locked --manifest-path wifi-protocol/Cargo.toml
+          cargo test --locked --manifest-path rust-core/Cargo.toml
+      - name: Lint and build Android release and instrumentation test APK
+        working-directory: android-app
+        shell: bash
+        run: |
+          bash ./gradlew --version | grep -F 'Gradle 9.6.0'
+          bash ./gradlew --no-daemon :app:lintRelease :app:testDebugUnitTest :app:assembleDebugAndroidTest :app:assembleRelease :app:bundleRelease
+      - name: Sign and verify Android packages
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS }}
+        run: |
+          if (!$env:ANDROID_KEYSTORE_BASE64) { throw 'Missing existing Android release keystore.' }
+          $env:ANDROID_KEYSTORE_PATH = Join-Path $env:RUNNER_TEMP "input-control-$([guid]::NewGuid()).p12"
+          try {
+            [IO.File]::WriteAllBytes($env:ANDROID_KEYSTORE_PATH, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+            Remove-Item Env:ANDROID_KEYSTORE_BASE64
+            ./release/Package-Android.ps1 -Sdk $env:ANDROID_HOME -Bundletool "$env:RUNNER_TEMP/bundletool.jar" -OutputDirectory dist/android
+          } finally {
+            Remove-Item -LiteralPath $env:ANDROID_KEYSTORE_PATH -Force -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: android-release
+          path: dist/android/
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    needs: [windows, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: '*-release'
+          path: dist
+          merge-multiple: true
+      - name: Check assets and create a draft for manual publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_SIGNER_SUBJECT: ${{ needs.windows.outputs.signer_subject }}
+        run: |
+          prefix="InputControl-$GITHUB_REF_NAME"
+          assets=("$prefix-windows-x64-setup.exe" "$prefix-windows-x64-portable.zip" "$prefix-android.apk" "$prefix-android.aab")
+          (
+            cd dist
+            test "$(find . -mindepth 1 -maxdepth 1 | wc -l)" -eq 4
+            for asset in "${assets[@]}"; do test -s "$asset"; done
+            sha256sum "${assets[@]}" > SHA256SUMS.txt
+            sha256sum --strict -c SHA256SUMS.txt
+          )
+          [[ -n $WINDOWS_SIGNER_SUBJECT ]]
+          apk_signer=$(sed -n 's/^releaseCertificateSha256=//p' release/android-signing.properties)
+          cp release/NOTES.md "$RUNNER_TEMP/input-control-notes.md"
+          printf '\nWindows Authenticode subject: %s\n\nAndroid APK signer SHA-256: %s\n' "$WINDOWS_SIGNER_SUBJECT" "$apk_signer" >> "$RUNNER_TEMP/input-control-notes.md"
+          for index in "${!assets[@]}"; do assets[$index]="dist/${assets[$index]}"; done
+          remote_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
+          [[ $remote_commit == "$(git rev-parse HEAD)" ]]
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "Input_Control $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/input-control-notes.md" "${assets[@]}" dist/SHA256SUMS.txt

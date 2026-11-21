@@ -1,0 +1,8 @@
+[package]
+name = "input-wifi"
+version = "0.2.0"
+edition = "2021"
+[dependencies]
+snow = {version="0.10",default-features=false,features=["use-curve25519","use-chacha20poly1305","use-sha2","use-getrandom"]}
+hex = "0.4"
+curve25519-dalek = {version="4.1",default-features=false}
