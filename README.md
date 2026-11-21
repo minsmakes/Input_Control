@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="docs/SETUP.md#step-by-step-installation"><img src="https://img.shields.io/badge/Build%20%26%20install-1D64B6?style=for-the-badge" alt="Build and install"></a> &nbsp;
-  <a href="docs/SETUP.md#device-connection-guide"><img src="https://img.shields.io/badge/Pair%20your%20devices-344D68?style=for-the-badge" alt="Pair your devices"></a>
+  <a href="https://github.com/minsmakes/Input_Control/releases/download/v1.5.0/input-control.apk"><img src="https://img.shields.io/badge/Android-Download%20APK-247452?style=for-the-badge" alt="Download the Android APK"></a> &nbsp;
+  <a href="https://github.com/minsmakes/Input_Control/releases/download/v1.5.0/input-control-receiver.exe"><img src="https://img.shields.io/badge/Windows-Download%20EXE-255E9C?style=for-the-badge" alt="Download the Windows EXE"></a>
 </p>
 
 <p align="center">
@@ -21,14 +21,14 @@
 </p>
 
 <p align="center">
-  <sub>Build the Android APK and Windows companion from a full source copy. Packaged downloads are not available yet.</sub>
+  <sub>Version 1.5.0 · Sign in to GitHub with access to this repository to download.</sub>
 </p>
 
 <p align="center">
   <a href="#touchpad-and-keyboard">Touchpad &amp; keyboard</a> ·
   <a href="#launcher-and-media">Launcher &amp; media</a> ·
-  <a href="#getting-started">Getting started</a> ·
-  <a href="docs/SETUP.md">Full setup guide</a>
+  <a href="#install-and-pair">Install &amp; pair</a> ·
+  <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
 <br>
@@ -51,11 +51,20 @@
 - **Playback and sound.** Use play/pause, previous, and next with compatible Windows players. See the active media session and adjust the PC’s default output volume or mute state.
 - **Appearance.** Pick a theme and toggle scenery in [Themes & Appearance](docs/screenshots/themes/appearance.png).
 
-## Getting started
+## Install and pair
 
-1. Build both components from your existing full source copy. This GitHub repository currently hosts the documentation and preview assets. [Required tools and build steps](docs/SETUP.md#required-downloads)
-2. Run the Windows companion, then open Input Control on the tablet. Put both devices on the same trusted IPv4 network.
-3. On the tablet, open **⋮ → Devices → Pair New Device** and select your PC. Compare the three code groups on both screens, enter the PC’s final group on the tablet, then confirm on the tablet and approve on the PC. [Pairing and manual connection](docs/SETUP.md#device-connection-guide)
-4. When the tablet says **Connected**, open **Control** and try moving the pointer or typing into Notepad.
+1. **Android.** Download and open [input-control.apk](https://github.com/minsmakes/Input_Control/releases/download/v1.5.0/input-control.apk). If prompted, allow your browser or file manager to install the APK. Use Android 9 or newer on ARM64 or x86-64. The app is designed for tablets, and phone layouts still need testing.
+2. **Windows.** Download and run [input-control-receiver.exe](https://github.com/minsmakes/Input_Control/releases/download/v1.5.0/input-control-receiver.exe) on Windows 11 x64. The companion window shows the PC name and listening address. If Windows reports missing Visual C++ DLLs, install the [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vc14/vc_redist.x64.exe).
+3. Put both devices on the same trusted IPv4 network. Open **⋮ → Devices → Pair New Device** on Android, find your PC, and tap **Pair**.
+4. Compare the three groups on Android with the first three on the PC. If they match, enter the PC’s fourth group on Android and tap **Confirm match**, then click **Approve** on the PC within 60 seconds. If the codes differ, reject the request and check that you selected the right PC.
+5. When Android says **Connected**, open **Control** and try moving the pointer or typing into Notepad. Use **Connect** for later sessions and **Disconnect** when finished. To stop the Windows companion, choose **Quit** from its notification-area icon.
 
-[System requirements](docs/SETUP.md#system-requirements) · [Configuration](docs/SETUP.md#configuration) · [Troubleshooting](docs/SETUP.md#troubleshooting) · [Developer guide](docs/SETUP.md#developer-guide) · [FAQ](docs/SETUP.md#frequently-asked-questions)
+## Troubleshooting
+
+- **The PC doesn’t appear.** Check that the companion is listening and that both devices are on the same subnet. On Android, use **Devices → Manual connection**, enter the PC’s IPv4 address and port **47831**, then tap **Continue**. The same pairing checks apply.
+- **The connection times out.** On a trusted network, check that Windows Firewall allows the companion on the Private profile for TCP 47831. Discovery also uses UDP 5353. If Android offers **Allow nearby devices**, grant it and try again.
+- **Android won’t update a debug install.** If the existing app was signed with a different key, uninstall it before installing this APK. This clears the saved pairing, so pair again.
+- **The pointer moves, but a window ignores keys.** Try a regular Notepad window. Windows may block injected input into elevated windows.
+- **The downloads return a 404.** This repository is private. Sign in with a GitHub account that has access.
+
+[Release notes and files](https://github.com/minsmakes/Input_Control/releases/tag/v1.5.0)
